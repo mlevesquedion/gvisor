@@ -1314,7 +1314,6 @@ func (e *endpoint) protocolMainLoop(handshake bool, wakerInitDone chan<- struct{
 
 	epilogue := func() {
 		// e.mu is expected to be hold upon entering this section.
-
 		if e.snd != nil {
 			e.snd.resendTimer.cleanup()
 		}
