@@ -22,10 +22,12 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
 	"gvisor.dev/gvisor/pkg/tcpip/link/loopback"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/icmp"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 )
@@ -204,7 +206,7 @@ func TestLoopbackAcceptAllInSubnet(t *testing.T) {
 				},
 			})
 
-			wq := waiter.Queue{}
+			var wq waiter.Queue
 			rep, err := s.NewEndpoint(udp.ProtocolNumber, test.addAddress.Protocol, &wq)
 			if err != nil {
 				t.Fatalf("NewEndpoint(%d, %d, _): %s", udp.ProtocolNumber, test.addAddress.Protocol, err)
@@ -310,5 +312,165 @@ func TestLoopbackSubnetLifetimeBoundToAddr(t *testing.T) {
 		Data:               data.ToVectorisedView(),
 	})); err != tcpip.ErrInvalidEndpointState {
 		t.Fatalf("got r.WritePacket(nil, %#v, _) = %s, want = %s", params, err, tcpip.ErrInvalidEndpointState)
+	}
+}
+
+func TestLocalPing(t *testing.T) {
+	const (
+		nicID        = 1
+		ipv4Loopback = tcpip.Address("\x7f\x00\x00\x01")
+
+		// icmpDataOffset is the offset to the data in both ICMPv4 and ICMPv6 echo
+		// request/reply packets.
+		icmpDataOffset = 8
+	)
+
+	channelEP := func() stack.LinkEndpoint { return channel.New(1, header.IPv6MinimumMTU, "") }
+	channelEPCheck := func(t *testing.T, e stack.LinkEndpoint) {
+		channelEP := e.(*channel.Endpoint)
+		if n := channelEP.Drain(); n != 0 {
+			t.Fatalf("got channelEP.Drain() = %d, want = 0", n)
+		}
+	}
+
+	tests := []struct {
+		name              string
+		transProto        tcpip.TransportProtocolNumber
+		netProto          tcpip.NetworkProtocolNumber
+		linkEndpoint      func() stack.LinkEndpoint
+		addr              tcpip.Address
+		icmpBuf           func(*testing.T) buffer.View
+		checkLinkEndpoint func(t *testing.T, e stack.LinkEndpoint)
+	}{
+		{
+			name:         "IPv4 loopback",
+			transProto:   icmp.ProtocolNumber4,
+			netProto:     ipv4.ProtocolNumber,
+			linkEndpoint: loopback.New,
+			addr:         ipv4Loopback,
+			icmpBuf: func(t *testing.T) buffer.View {
+				data := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+				hdr := header.ICMPv4(make([]byte, header.ICMPv4MinimumSize+len(data)))
+				hdr.SetType(header.ICMPv4Echo)
+				if n := copy(hdr.Payload(), data[:]); n != len(data) {
+					t.Fatalf("copied %d bytes but expected to copy %d bytes", n, len(data))
+				}
+				return buffer.View(hdr)
+			},
+			checkLinkEndpoint: func(*testing.T, stack.LinkEndpoint) {},
+		},
+		{
+			name:         "IPv6 loopback",
+			transProto:   icmp.ProtocolNumber6,
+			netProto:     ipv6.ProtocolNumber,
+			linkEndpoint: loopback.New,
+			addr:         header.IPv6Loopback,
+			icmpBuf: func(t *testing.T) buffer.View {
+				data := [8]byte{1, 2, 3, 4, 5, 6, 7, 9}
+				hdr := header.ICMPv6(make([]byte, header.ICMPv6MinimumSize+len(data)))
+				hdr.SetType(header.ICMPv6EchoRequest)
+				if n := copy(hdr.Payload(), data[:]); n != len(data) {
+					t.Fatalf("copied %d bytes but expected to copy %d bytes", n, len(data))
+				}
+				return buffer.View(hdr)
+			},
+			checkLinkEndpoint: func(*testing.T, stack.LinkEndpoint) {},
+		},
+		{
+			name:         "IPv4 non-loopback",
+			transProto:   icmp.ProtocolNumber4,
+			netProto:     ipv4.ProtocolNumber,
+			linkEndpoint: channelEP,
+			addr:         ipv4Addr.Address,
+			icmpBuf: func(t *testing.T) buffer.View {
+				data := [8]byte{1, 2, 3, 4, 5, 6, 7, 10}
+				hdr := header.ICMPv4(make([]byte, header.ICMPv4MinimumSize+len(data)))
+				hdr.SetType(header.ICMPv4Echo)
+				if n := copy(hdr.Payload(), data[:]); n != len(data) {
+					t.Fatalf("copied %d bytes but expected to copy %d bytes", n, len(data))
+				}
+				return buffer.View(hdr)
+			},
+			checkLinkEndpoint: channelEPCheck,
+		},
+		{
+			name:         "IPv6 non-loopback",
+			transProto:   icmp.ProtocolNumber6,
+			netProto:     ipv6.ProtocolNumber,
+			linkEndpoint: channelEP,
+			addr:         ipv6Addr.Address,
+			icmpBuf: func(t *testing.T) buffer.View {
+				data := [8]byte{1, 2, 3, 4, 5, 6, 7, 11}
+				hdr := header.ICMPv6(make([]byte, header.ICMPv6MinimumSize+len(data)))
+				hdr.SetType(header.ICMPv6EchoRequest)
+				if n := copy(hdr.Payload(), data[:]); n != len(data) {
+					t.Fatalf("copied %d bytes but expected to copy %d bytes", n, len(data))
+				}
+				return buffer.View(hdr)
+			},
+			checkLinkEndpoint: channelEPCheck,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			s := stack.New(stack.Options{
+				NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol},
+				TransportProtocols: []stack.TransportProtocolFactory{icmp.NewProtocol4, icmp.NewProtocol6},
+				HandleLocal:        true,
+			})
+			e := test.linkEndpoint()
+			if err := s.CreateNIC(nicID, e); err != nil {
+				t.Fatalf("s.CreateNIC(%d, _): %s", nicID, err)
+			}
+			if err := s.AddAddress(nicID, test.netProto, test.addr); err != nil {
+				t.Fatalf("s.AddAddress(%d, %d, %s): %s", nicID, test.netProto, test.addr, err)
+			}
+			s.SetRouteTable([]tcpip.Route{
+				tcpip.Route{
+					Destination: test.addr.WithPrefix().Subnet(),
+					NIC:         nicID,
+				},
+			})
+
+			var wq waiter.Queue
+			we, ch := waiter.NewChannelEntry(nil)
+			wq.EventRegister(&we, waiter.EventIn)
+			ep, err := s.NewEndpoint(test.transProto, test.netProto, &wq)
+			if err != nil {
+				t.Fatalf("s.NewEndpoint(%d, %d, _): %s", test.transProto, test.netProto, err)
+			}
+			defer ep.Close()
+
+			connAddr := tcpip.FullAddress{Addr: test.addr}
+			if err := ep.Connect(connAddr); err != nil {
+				t.Fatalf("ep.Connect(%#v): %s", connAddr, err)
+			}
+
+			payload := tcpip.SlicePayload(test.icmpBuf(t))
+			var wOpts tcpip.WriteOptions
+			if n, _, err := ep.Write(payload, wOpts); err != nil {
+				t.Fatalf("ep.Write(%#v, %#v): %s", payload, wOpts, err)
+			} else if n != int64(len(payload)) {
+				t.Fatalf("got ep.Write(%#v, %#v) = (%d, _, nil), want = (%d, _, nil)", payload, wOpts, n, len(payload))
+			}
+
+			// Wait for the endpoint to become readable.
+			<-ch
+
+			var addr tcpip.FullAddress
+			v, _, err := ep.Read(&addr)
+			if err != nil {
+				t.Fatalf("ep.Read(_): %s", err)
+			}
+			if diff := cmp.Diff(v[icmpDataOffset:], buffer.View(payload[icmpDataOffset:])); diff != "" {
+				t.Errorf("received data mismatch (-want +got):\n%s", diff)
+			}
+			if addr.Addr != test.addr {
+				t.Errorf("got addr.Addr = %s, want = %s", addr.Addr, test.addr)
+			}
+
+			test.checkLinkEndpoint(t, e)
+		})
 	}
 }
