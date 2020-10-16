@@ -222,6 +222,16 @@ packetimpact-tests: load-packetimpact
 	@$(call submake,test-runtime OPTIONS="--jobs=HOST_CPUS*3 --local_test_jobs=HOST_CPUS*3" RUNTIME="packetimpact" TARGETS="$(shell $(MAKE) query TARGETS='attr(tags, packetimpact, tests(//...))')")
 .PHONY: packetimpact-tests
 
+platform-benchmark:
+	@$(call submake,install-benchmark-runtime RUNTIME="$(RUNTIME)" ARGS="$(PARGS)")
+	@$(call submake, run-benchmark TARGETS="$(TARGETS)" RUNTIME="$(RUNTIME)" ARGS="$(ARGS)" OUTFILE="$(OUTFILE)" BQARGS="$(BQARGS)")
+.PHONY: benchmark-tests
+
+run-benchmark:
+	@$(call submake,sudo TARGETS="$(TARGETS)"  ARGS="--runtime=$(RUNTIME) $(ARGS)" | tee "$(OUTFILE)")
+	@$(call submake,run TARGETS=//tools/parsers:parser ARGS="parse --runtime=$(RUNTIME) --file=$(OUTFILE) $(BQARGS)")
+.PHONY: run-benchmark
+
 # Specific containerd version tests.
 containerd-test-%: load-basic_alpine load-basic_python load-basic_busybox load-basic_resolv load-basic_httpd load-basic_ubuntu
 	@$(call submake,install-test-runtime RUNTIME="root")
@@ -357,7 +367,11 @@ refresh: ## Refreshes the runtime binary (for development only). Must have calle
 .PHONY: refresh
 
 install-test-runtime: ## Installs the runtime for testing. Requires sudo.
-	@$(call submake,refresh ARGS="--net-raw --TESTONLY-test-name-env=RUNSC_TEST_NAME --debug --strace --log-packets $(ARGS)")
+	@$(call submake,install-benchmark-runtime RUNTIME=$(RUNTIME) RUNSC_TEST_NAME=$(RUNSC_TEST_NAME) ARGS="--TESTONLY-test-name-env=RUNSC_TEST_NAME --debug --strace --log-packets $(ARGS)")
+.PHONY: install-test-runtime
+
+install-benchmark-runtime: ## Installs the runtime for benchmarks. Requires sudo.
+	@$(call submake,refresh ARGS="--net-raw  $ARGS")
 	@$(call submake,configure RUNTIME_NAME=runsc)
 	@$(call submake,configure RUNTIME_NAME="$(RUNTIME)")
 	@sudo systemctl restart docker
@@ -365,7 +379,7 @@ install-test-runtime: ## Installs the runtime for testing. Requires sudo.
 		sudo chmod 0755 /etc/docker && \
 		sudo chmod 0644 /etc/docker/daemon.json; \
 	fi
-.PHONY: install-test-runtime
+.PHONY: install-benchmark-runtime
 
 configure: ## Configures a single runtime. Requires sudo. Typically called from dev or install-test-runtime.
 	@sudo sudo "$(RUNTIME_BIN)" install --experimental=true --runtime="$(RUNTIME_NAME)" -- --debug-log "$(RUNTIME_LOGS)" $(ARGS)
