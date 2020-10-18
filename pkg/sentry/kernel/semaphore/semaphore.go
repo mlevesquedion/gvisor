@@ -52,6 +52,9 @@ type Registry struct {
 	mu         sync.Mutex `state:"nosave"`
 	semaphores map[int32]*Set
 	lastIDUsed int32
+	// index maintains a mapping between a set's index in virutal array and
+	// its identifier.
+	indexes map[int32]int32
 }
 
 // Set represents a set of semaphores that can be operated atomically.
@@ -112,6 +115,7 @@ func NewRegistry(userNS *auth.UserNamespace) *Registry {
 	return &Registry{
 		userNS:     userNS,
 		semaphores: make(map[int32]*Set),
+		indexes:    make(map[int32]int32),
 	}
 }
 
@@ -162,7 +166,7 @@ func (r *Registry) FindOrCreate(ctx context.Context, key, nsems int32, mode linu
 	}
 
 	// Apply system limits.
-	if len(r.semaphores) >= setsMax {
+	if len(r.semaphores) >= setsMax || len(r.indexes) >= setsMax {
 		return nil, syserror.EINVAL
 	}
 	if r.totalSems() > int(semaphoresTotalMax-nsems) {
@@ -185,6 +189,10 @@ func (r *Registry) RemoveID(id int32, creds *auth.Credentials) error {
 	if set == nil {
 		return syserror.EINVAL
 	}
+	index, err := r.findIndexByID(id)
+	if err != nil {
+		return err
+	}
 
 	set.mu.Lock()
 	defer set.mu.Unlock()
@@ -196,6 +204,7 @@ func (r *Registry) RemoveID(id int32, creds *auth.Credentials) error {
 	}
 
 	delete(r.semaphores, set.ID)
+	delete(r.indexes, index)
 	set.destroy()
 	return nil
 }
@@ -219,6 +228,11 @@ func (r *Registry) newSet(ctx context.Context, key int32, owner, creator fs.File
 			continue
 		}
 		if r.semaphores[id] == nil {
+			index, err := r.findAvaiableIndex()
+			if err != nil {
+				return nil, err
+			}
+			r.indexes[index] = id
 			r.lastIDUsed = id
 			r.semaphores[id] = set
 			set.ID = id
@@ -230,11 +244,40 @@ func (r *Registry) newSet(ctx context.Context, key int32, owner, creator fs.File
 	return nil, syserror.ENOMEM
 }
 
+func (r *Registry) findAvaiableIndex() (int32, error) {
+	for index := int32(0); index < setsMax; index++ {
+		if _, present := r.indexes[index]; !present {
+			return index, nil
+		}
+	}
+	return 0, syserror.ENOMEM
+}
+
 // FindByID looks up a set given an ID.
 func (r *Registry) FindByID(id int32) *Set {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.semaphores[id]
+}
+
+// FindByIndex looks up a set given an index.
+func (r *Registry) FindByIndex(index int32) *Set {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	id, present := r.indexes[index]
+	if !present {
+		return nil
+	}
+	return r.semaphores[id]
+}
+
+func (r *Registry) findIndexByID(id int32) (int32, error) {
+	for k, v := range r.indexes {
+		if v == id {
+			return k, nil
+		}
+	}
+	return 0, syserror.EINVAL
 }
 
 func (r *Registry) findByKey(key int32) *Set {
