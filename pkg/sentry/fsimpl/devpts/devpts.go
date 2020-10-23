@@ -110,10 +110,10 @@ func (fstype *FilesystemType) newFilesystem(ctx context.Context, vfsObj *vfs.Vir
 	}
 	root.InodeAttrs.Init(ctx, creds, linux.UNNAMED_MAJOR, devMinor, 1, linux.ModeDirectory|0555)
 	root.OrderedChildren.Init(kernfs.OrderedChildrenOptions{})
-	root.EnableLeakCheck()
+	root.InitRefs()
 
 	var rootD kernfs.Dentry
-	rootD.Init(&fs.Filesystem, root)
+	rootD.InitRoot(&fs.Filesystem, root)
 
 	// Construct the pts master inode and dentry. Linux always uses inode
 	// id 2 for ptmx. See fs/devpts/inode.c:mknod_ptmx.

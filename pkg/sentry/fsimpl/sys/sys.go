@@ -102,7 +102,7 @@ func (fsType FilesystemType) GetFilesystem(ctx context.Context, vfsObj *vfs.Virt
 		"power":    fs.newDir(ctx, creds, defaultSysDirMode, nil),
 	})
 	var rootD kernfs.Dentry
-	rootD.Init(&fs.Filesystem, root)
+	rootD.InitRoot(&fs.Filesystem, root)
 	return fs.VFSFilesystem(), rootD.VFSDentry(), nil
 }
 
@@ -160,7 +160,7 @@ func (fs *filesystem) newDir(ctx context.Context, creds *auth.Credentials, mode 
 	d := &dir{}
 	d.InodeAttrs.Init(ctx, creds, linux.UNNAMED_MAJOR, fs.devMinor, fs.NextIno(), linux.ModeDirectory|0755)
 	d.OrderedChildren.Init(kernfs.OrderedChildrenOptions{})
-	d.EnableLeakCheck()
+	d.InitRefs()
 	d.IncLinks(d.OrderedChildren.Populate(contents))
 	return d
 }

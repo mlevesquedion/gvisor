@@ -205,7 +205,7 @@ func (fsType FilesystemType) GetFilesystem(ctx context.Context, vfsObj *vfs.Virt
 	}
 
 	// root is the fusefs root directory.
-	root := fs.newRootInode(ctx, creds, fsopts.rootMode)
+	root := fs.newRoot(ctx, creds, fsopts.rootMode)
 
 	return fs.VFSFilesystem(), root.VFSDentry(), nil
 }
@@ -284,14 +284,14 @@ type inode struct {
 	link string
 }
 
-func (fs *filesystem) newRootInode(ctx context.Context, creds *auth.Credentials, mode linux.FileMode) *kernfs.Dentry {
+func (fs *filesystem) newRoot(ctx context.Context, creds *auth.Credentials, mode linux.FileMode) *kernfs.Dentry {
 	i := &inode{fs: fs, nodeID: 1}
 	i.InodeAttrs.Init(ctx, creds, linux.UNNAMED_MAJOR, fs.devMinor, 1, linux.ModeDirectory|0755)
 	i.OrderedChildren.Init(kernfs.OrderedChildrenOptions{})
-	i.EnableLeakCheck()
+	i.InitRefs()
 
 	var d kernfs.Dentry
-	d.Init(&fs.Filesystem, i)
+	d.InitRoot(&fs.Filesystem, i)
 	return &d
 }
 
@@ -301,7 +301,7 @@ func (fs *filesystem) newInode(ctx context.Context, nodeID uint64, attr linux.FU
 	i.InodeAttrs.Init(ctx, &creds, linux.UNNAMED_MAJOR, fs.devMinor, fs.NextIno(), linux.FileMode(attr.Mode))
 	atomic.StoreUint64(&i.size, attr.Size)
 	i.OrderedChildren.Init(kernfs.OrderedChildrenOptions{})
-	i.EnableLeakCheck()
+	i.InitRefs()
 	return i
 }
 
