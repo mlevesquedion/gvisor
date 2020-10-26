@@ -66,7 +66,8 @@ func testOpenOrDie(ctx context.Context, t *testing.T, n fs.InodeOperations, flag
 	d := fs.NewDirent(ctx, inode, "pipe")
 	file, err := n.GetFile(ctx, d, flags)
 	if err != nil {
-		t.Fatalf("open with flags %+v failed: %v", flags, err)
+		t.Errorf("open with flags %+v failed: %v", flags, err)
+		return nil, err
 	}
 	if doneChan != nil {
 		doneChan <- struct{}{}
