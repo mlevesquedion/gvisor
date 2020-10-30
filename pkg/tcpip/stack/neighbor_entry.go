@@ -242,7 +242,12 @@ func (e *neighborEntry) setStateLocked(next NeighborState) {
 			e.job.Schedule(config.RetransmitTimer)
 		}
 
-		sendUnicastProbe()
+		// Send a probe in another gorountine to free this thread of execution
+		// for finishing the state transition. This is necessary to avoid
+		// deadlock where sending and processing probes are done in the same
+		// call stack, such as loopback and integration tests.
+		e.job = e.nic.stack.newJob(&e.mu, sendUnicastProbe)
+		e.job.Schedule(0)
 
 	case Failed:
 		e.notifyWakersLocked()
@@ -324,7 +329,12 @@ func (e *neighborEntry) handlePacketQueuedLocked(localAddr tcpip.Address) {
 			e.job.Schedule(config.RetransmitTimer)
 		}
 
-		sendMulticastProbe()
+		// Send a probe in another gorountine to free this thread of execution
+		// for finishing the state transition. This is necessary to avoid
+		// deadlock where sending and processing probes are done in the same
+		// call stack, such as loopback and integration tests.
+		e.job = e.nic.stack.newJob(&e.mu, sendMulticastProbe)
+		e.job.Schedule(0)
 
 	case Stale:
 		e.setStateLocked(Delay)
